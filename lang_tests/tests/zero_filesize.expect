@@ -1,0 +1,6 @@
+Helper:
+  status: error
+  env-var: ROTEE_ARGS=-s 0
+  stdout:
+    >>> stderr
+    error: file size (-s) must be non-zero

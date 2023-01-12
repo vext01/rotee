@@ -1,0 +1,6 @@
+Helper:
+  status: error
+  env-var: ROTEE_ARGS=-b 0
+  stdout:
+    >>> stderr
+    error: buffer size (-b) must be non-zero

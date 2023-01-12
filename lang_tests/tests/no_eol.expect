@@ -1,0 +1,6 @@
+Helper:
+  stdout:
+    >>> stdout
+    123<no-eol>
+    >>> rotee.0
+    123<no-eol>

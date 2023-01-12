@@ -1,0 +1,6 @@
+Helper:
+  stdout:
+    >>> stdout
+    123
+    >>> rotee.0
+    123

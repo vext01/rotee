@@ -1,0 +1,6 @@
+Helper:
+  status: error
+  env-var: ROTEE_ARGS=-n 0
+  stdout:
+    >>> stderr
+    error: number of files (-n) must be non-zero

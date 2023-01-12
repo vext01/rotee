@@ -1,0 +1,19 @@
+[package]
+name = "rotee"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0/MIT"
+
+[dependencies]
+app = "0.6.5"
+# XXX tempfile is only required for the test helper binary, but there's not way
+# (yet) to only compile the binary if building with tests enabled.
+tempfile = "3.3.0"
+
+[dev-dependencies]
+lang_tester = "0.7.1"
+
+[[test]]
+name = "lang_tests"
+path = "lang_tests/run.rs"
+harness = false

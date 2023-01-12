@@ -1,0 +1,15 @@
+Helper:
+  env-var: ROTEE_ARGS=-s 4 -p foobarbaz
+  stdout:
+    >>> stdout
+    123
+    456
+    789
+    >>> foobarbaz0
+    <no-eol>
+    >>> foobarbaz1
+    789
+    >>> foobarbaz2
+    456
+    >>> foobarbaz3
+    123

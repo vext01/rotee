@@ -1,0 +1,11 @@
+Helper:
+  env-var: ROTEE_ARGS=-s 4 -n 2
+  stdout:
+    >>> stdout
+    123
+    456
+    78
+    >>> rotee.0
+    78
+    >>> rotee.1
+    456
