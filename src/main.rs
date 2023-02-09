@@ -1,10 +1,13 @@
 use app::{App, Opt};
+use libc::{sigemptyset, sigfillset, sigprocmask, sigset_t, SIG_BLOCK, SIG_SETMASK};
 use std::{
     default::Default,
+    error::Error,
     fs::{rename, File},
     io::{self, Read, Write},
+    mem::MaybeUninit,
     path::PathBuf,
-    process,
+    process, ptr,
 };
 
 struct Config {
@@ -41,7 +44,30 @@ fn outfile_path(prefix: &str, suffix: usize) -> PathBuf {
     PathBuf::from(format!("{}{}", prefix, suffix))
 }
 
-fn rotate(config: &Config, old_file: File) -> Result<File, io::Error> {
+fn rotate(config: &Config, old_file: File, all_sigs: sigset_t) -> Result<File, Box<dyn Error>> {
+    // `rotate_inner()` must not be interrupted, or output files may go missing. We block signals
+    // that would kill us (the ones we can) until we are done rotating.
+    //
+    // We can use a full signal block set here. `sigprocmask` will ignore the unmaskable ones.
+    let mut old_sigs = MaybeUninit::uninit();
+    if unsafe { sigprocmask(SIG_BLOCK, &all_sigs, old_sigs.as_mut_ptr()) } == -1 {
+        return Err("sigprocmask failed".into());
+    }
+    let old_sigs = unsafe { old_sigs.assume_init() };
+
+    // Signals are now blocked. Do the rotation.
+    let res = rotate_inner(config, old_file);
+
+    // Restore the old signal mask.
+    if unsafe { sigprocmask(SIG_SETMASK, &old_sigs, ptr::null_mut()) } == -1 {
+        return Err("sigprocmask failed".into());
+    }
+
+    res.map_err(|e| e.into())
+}
+
+/// Rotate the output files, returning the freshly created file to use next.
+fn rotate_inner(config: &Config, old_file: File) -> Result<File, io::Error> {
     drop(old_file);
 
     for i in (0..(config.num_files - 1)).rev() {
@@ -104,11 +130,21 @@ fn main() {
     }
 }
 
-fn run(config: &Config) -> Result<(), io::Error> {
+fn run(config: &Config) -> Result<(), Box<dyn Error>> {
     let mut of = File::create(outfile_path(&config.file_prefix, 0))?;
     let mut cur_size = 0;
     let mut buf = Vec::with_capacity(config.buffer_size);
     buf.resize(config.buffer_size, 0);
+
+    // Compute the full set of signals for when we have to block signals.
+    let mut all_sigs = MaybeUninit::uninit();
+    if unsafe { sigemptyset(all_sigs.as_mut_ptr()) } == -1 {
+        return Err("sigemptyset failed".into());
+    }
+    let mut all_sigs = unsafe { all_sigs.assume_init() };
+    if unsafe { sigfillset(&mut all_sigs as *mut sigset_t) } == -1 {
+        return Err("sigfillset failed".into());
+    }
 
     loop {
         match io::stdin().read(&mut buf)? {
@@ -126,7 +162,7 @@ fn run(config: &Config) -> Result<(), io::Error> {
                     idx += write_size;
                     cur_size += write_size;
                     if cur_size >= config.file_size {
-                        of = rotate(config, of)?;
+                        of = rotate(config, of, all_sigs)?;
                         cur_size = 0;
                     }
                 }
@@ -134,4 +170,59 @@ fn run(config: &Config) -> Result<(), io::Error> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use libc::{kill, SIGTERM};
+    use rand::Rng;
+    use std::{env, fs::File, path::PathBuf, process::Command, thread, time::Duration};
+    use tempfile::TempDir;
+
+    #[cfg(cargo_profile = "release")]
+    static CARGO_PROFILE: &str = "release";
+    #[cfg(not(cargo_profile = "release"))]
+    static CARGO_PROFILE: &str = "debug";
+
+    /// Check (best we can) that delivering catchable signals cannot interrupt file rotation.
+    /// https://github.com/vext01/rotee/issues/1
+    #[test]
+    fn test_signal() {
+        let md = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..50 {
+            let p = [&md, "target", CARGO_PROFILE, "rotee"]
+                .iter()
+                .collect::<PathBuf>();
+            let dir = TempDir::new().unwrap();
+            env::set_current_dir(dir.path()).unwrap();
+            let outfile0 = [dir.path().to_str().unwrap(), "rotee.0"]
+                .iter()
+                .collect::<PathBuf>();
+
+            // Pipe /dev/zero into a rotee with a very small output file size, so that rotation
+            // happens very frequently.
+            let zero = File::open("/dev/zero").unwrap();
+            let mut child = Command::new(p)
+                .stdin(zero)
+                .args(&["-s", "1", "-e"])
+                .spawn()
+                .unwrap();
+
+            // Wait for `rotee.0` to appear for the first time.
+            while !outfile0.exists() {
+                thread::sleep(Duration::from_nanos(10));
+            }
+
+            // After a random amount of time, send rotee a catchable signal.
+            thread::sleep(Duration::from_millis(rng.gen_range(0..101)));
+            unsafe { kill(i32::try_from(child.id()).unwrap(), SIGTERM) };
+
+            // rotee should exit with failure.
+            assert!(!child.wait().unwrap().success());
+            // and `rotee.0` should always exist.
+            assert!(outfile0.exists());
+        }
+    }
 }
